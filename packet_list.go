@@ -1,5 +1,10 @@
 package rudp
 
+import (
+	"sync"
+	"time"
+)
+
 type packetListOrderType int8
 
 const (
@@ -12,15 +17,23 @@ type packetList struct {
 	head, rail *node
 	length     int32
 	orderType  packetListOrderType
+	cond       *sync.Cond
+	mutex      *sync.Mutex
 }
 
 type node struct {
 	data *packet
 	next *node
+	ts   int64
 }
 
-func newPacketList() *packetList {
-	return &packetList{}
+func newPacketList(orderType packetListOrderType) *packetList {
+	r := &packetList{
+		orderType: orderType,
+		mutex:     &sync.Mutex{},
+	}
+	r.cond = sync.NewCond(r.mutex)
+	return r
 }
 
 func (l *packetList) getPacketSortKey(p *packet) uint32 {
@@ -32,7 +45,9 @@ func (l *packetList) getPacketSortKey(p *packet) uint32 {
 }
 
 func (l *packetList) putPacket(p *packet) {
-	newNode := &node{data: p}
+	newNode := &node{data: p, ts: time.Now().Unix()}
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
 	if l.head == nil {
 		l.head = newNode
 		l.rail = newNode
@@ -80,7 +95,8 @@ func (l *packetList) removePacketByNb(nb uint32) {
 	if l.empty() {
 		return
 	}
-
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
 	var last *node
 	for cur := l.head; cur != nil; cur = cur.next {
 		curNb := l.getPacketSortKey(cur.data)

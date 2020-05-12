@@ -20,9 +20,9 @@ const (
 	rudpSegmentTypeConn
 	rudpSegmentTypeConnAck
 	rudpSegmentTypeFin
-	rudpSegmentTypeFinAck
 	rudpSegmentTypeAck
 	rudpSegmentTypePin
+	rudpSegmentTypeErr
 )
 
 // ------------------------------------------
@@ -30,13 +30,13 @@ const (
 // ------------------------------------------
 // |          Ack Number(32bits)            |
 // ------------------------------------------
-// |C|A|F|P|.15bits....|.......2byte........|
-// |O|C|I|I|reserved...|.....data len.......|
-// |N|K|N|N|...........|....................|
+// |C|A|F|P|E|12bits...|.......2byte........|
+// |O|C|I|I|R|reserved.|.....data len.......|
+// |N|K|N|N|R|.........|....................|
 // -----------------------------------------
 // |................data....................|
 
-func unmarshal(data []byte) (*packet, error) {
+func unmarshalRUDPPacket(data []byte) (*packet, error) {
 	r := &packet{}
 	if len(data) < RUDPHeaderLen {
 		return nil, errors.New("illegal rudp segment")
@@ -45,7 +45,7 @@ func unmarshal(data []byte) (*packet, error) {
 	r.seqNumber = binary.BigEndian.Uint32(data[0:4])
 	r.ackNumber = binary.BigEndian.Uint32(data[4:8])
 
-	connFlag, ackFlag, finFlag, pinFlag := parseFlag(data[8])
+	connFlag, ackFlag, finFlag, pinFlag, errFlag := parseFlag(data[8])
 	switch {
 	case connFlag:
 		if ackFlag {
@@ -54,15 +54,13 @@ func unmarshal(data []byte) (*packet, error) {
 			r.segmentType = rudpSegmentTypeConn
 		}
 	case finFlag:
-		if ackFlag {
-			r.segmentType = rudpSegmentTypeFinAck
-		} else {
-			r.segmentType = rudpSegmentTypeFin
-		}
+		r.segmentType = rudpSegmentTypeFin
 	case pinFlag:
 		r.segmentType = rudpSegmentTypePin
 	case ackFlag:
 		r.segmentType = rudpSegmentTypeAck
+	case errFlag:
+		r.segmentType = rudpSegmentTypeErr
 	default:
 		r.segmentType = rudpSegmentTypeNormal
 	}
@@ -72,7 +70,7 @@ func unmarshal(data []byte) (*packet, error) {
 	return r, nil
 }
 
-func parseFlag(flag byte) (connFlag, ackFlag, finFlag, pinFlag bool) {
+func parseFlag(flag byte) (connFlag, ackFlag, finFlag, pinFlag, errFlag bool) {
 	if flag&(1<<7) != 0 {
 		connFlag = true
 	} else {
@@ -96,6 +94,12 @@ func parseFlag(flag byte) (connFlag, ackFlag, finFlag, pinFlag bool) {
 	} else {
 		pinFlag = false
 	}
+
+	if flag&(1<<3) != 0 {
+		errFlag = true
+	} else {
+		errFlag = false
+	}
 	return
 }
 
@@ -114,15 +118,55 @@ func (p *packet) marshal() []byte {
 		flag &= (1 << 6)
 	case rudpSegmentTypeFin:
 		flag &= (1 << 5)
-	case rudpSegmentTypeFinAck:
-		flag &= (1 << 5)
-		flag &= (1 << 4)
 	case rudpSegmentTypePin:
 		flag &= (1 << 3)
+	case rudpSegmentTypeErr:
+		flag &= (1 << 2)
 	}
 	binary.BigEndian.PutUint16(buf[10:12], uint16(len(p.payload)))
 	for i, b := range p.payload {
 		buf[RUDPHeaderLen+i] = b
 	}
 	return buf
+}
+
+func newNormalPacket(payload []byte, seqNumber uint32) *packet {
+	return &packet{
+		seqNumber:   seqNumber,
+		segmentType: rudpSegmentTypeNormal,
+		payload:     payload,
+	}
+}
+
+func newAckPacket(ackNumber uint32) *packet {
+	return &packet{
+		ackNumber:   ackNumber,
+		segmentType: rudpSegmentTypeAck,
+	}
+}
+
+func newConPacket(seqNumber uint32) *packet {
+	return &packet{
+		seqNumber:   seqNumber,
+		segmentType: rudpSegmentTypeConn,
+	}
+}
+
+func newConAckPacket(ackNumber uint32) *packet {
+	return &packet{
+		seqNumber:   ackNumber,
+		segmentType: rudpSegmentTypeConnAck,
+	}
+}
+
+func newFinPacket() *packet {
+	return &packet{
+		segmentType: rudpSegmentTypeFin,
+	}
+}
+
+func newPinPacket() *packet {
+	return &packet{
+		segmentType: rudpSegmentTypePin,
+	}
 }
