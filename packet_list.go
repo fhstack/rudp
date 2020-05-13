@@ -1,6 +1,7 @@
 package rudp
 
 import (
+	"fmt"
 	"sync"
 	"time"
 )
@@ -52,7 +53,6 @@ func (l *packetList) putPacket(p *packet) {
 		l.head = newNode
 		l.rail = newNode
 		l.length++
-		return
 	} else {
 		var last *node
 		cur := l.head
@@ -105,6 +105,7 @@ func (l *packetList) consume() *packet {
 			}
 			return head.data
 		} else {
+			fmt.Println("cond wait")
 			l.cond.Wait()
 		}
 	}
@@ -164,5 +165,11 @@ func (l *packetList) removePacketByNb(nb uint32) {
 			return
 		}
 		last = cur
+	}
+}
+
+func (l *packetList) debug() {
+	for cur := l.head; cur != nil; cur = cur.next {
+		fmt.Printf("seqNb: %d, payload: %s\n", cur.data.seqNumber, string(cur.data.payload))
 	}
 }

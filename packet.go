@@ -112,17 +112,20 @@ func (p *packet) marshal() []byte {
 	case rudpSegmentTypeNormal:
 		flag = 0
 	case rudpSegmentTypeConn:
-		flag &= (1 << 7)
+		flag |= (1 << 7)
 	case rudpSegmentTypeConnAck:
-		flag &= (1 << 7)
-		flag &= (1 << 6)
+		flag |= (1 << 7)
+		flag |= (1 << 6)
+	case rudpSegmentTypeAck:
+		flag |= (1 << 6)
 	case rudpSegmentTypeFin:
-		flag &= (1 << 5)
+		flag |= (1 << 5)
 	case rudpSegmentTypePin:
-		flag &= (1 << 3)
+		flag |= (1 << 4)
 	case rudpSegmentTypeErr:
-		flag &= (1 << 2)
+		flag |= (1 << 3)
 	}
+	buf[8] = flag
 	binary.BigEndian.PutUint16(buf[10:12], uint16(len(p.payload)))
 	for i, b := range p.payload {
 		buf[RUDPHeaderLen+i] = b
