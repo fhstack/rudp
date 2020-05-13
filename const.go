@@ -7,6 +7,7 @@ const (
 	RUDPPPayloadLenLimit        = RawUDPPacketLenLimit - RUDPHeaderLen
 	DefaultSendTickNano         = 1000 // 1ms
 	DefaultHeartBeatCycleMinute = 30
+	ResendDelayThreshholdMS     = 500
 )
 
 const (

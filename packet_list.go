@@ -22,9 +22,9 @@ type packetList struct {
 }
 
 type node struct {
-	data *packet
-	next *node
-	ts   int64
+	data   *packet
+	next   *node
+	tsNano int64
 }
 
 func newPacketList(orderType packetListOrderType) *packetList {
@@ -45,7 +45,7 @@ func (l *packetList) getPacketSortKey(p *packet) uint32 {
 }
 
 func (l *packetList) putPacket(p *packet) {
-	newNode := &node{data: p, ts: time.Now().Unix()}
+	newNode := &node{data: p, tsNano: time.Now().UnixNano()}
 	l.mutex.Lock()
 	defer l.mutex.Unlock()
 	if l.head == nil {
@@ -80,23 +80,69 @@ func (l *packetList) putPacket(p *packet) {
 		l.length++
 		return
 	}
+	l.cond.Signal()
 }
 
 func (l *packetList) empty() bool {
 	return l.length == 0
 }
 
-func (l *packetList) getHeadPacket() *packet {
-	return l.head.data
+func (l *packetList) consume() *packet {
+	l.mutex.Lock()
+	defer func() {
+		l.length--
+		l.mutex.Unlock()
+	}()
+
+	for {
+		if l.head != nil {
+			head := l.head
+			if l.head == l.rail {
+				l.head = nil
+				l.rail = nil
+			} else {
+				l.head = head.next
+			}
+			return head.data
+		} else {
+			l.cond.Wait()
+		}
+	}
+}
+
+func (l *packetList) consumePacketSinceNMs(N int32) []*packet {
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
+	if l.empty() {
+		return nil
+	}
+	// res should be nil at most time
+	var res []*packet
+	now := time.Now().UnixNano()
+	cur := l.head
+	for ; cur != nil; cur = cur.next {
+		dis := now - cur.tsNano
+		if dis >= int64(N*1e6) {
+			res = append(res, cur.data)
+		} else {
+			break
+		}
+	}
+	l.head = cur
+	if cur == nil {
+		l.rail = nil
+	}
+	l.length -= int32(len(res))
+	return res
 }
 
 // removePacketBySeqNb return val means if the seqNb packet is be found and deleted
 func (l *packetList) removePacketByNb(nb uint32) {
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
 	if l.empty() {
 		return
 	}
-	l.mutex.Lock()
-	defer l.mutex.Unlock()
 	var last *node
 	for cur := l.head; cur != nil; cur = cur.next {
 		curNb := l.getPacketSortKey(cur.data)

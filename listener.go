@@ -40,7 +40,6 @@ func (l *RUDPListener) Accept() (net.Conn, error) {
 	case err := <-l.err:
 		return nil, err
 	}
-	return nil, nil
 }
 
 func (l *RUDPListener) Close() error {
@@ -63,12 +62,7 @@ func (l *RUDPListener) listen() {
 		buf = buf[:n]
 		if v, ok := l.peerMap.Load(remoteAddr.String()); ok {
 			rudpConn := v.(*RUDPConn)
-			apacket, err := unmarshalRUDPPacket(buf)
-			if err != nil {
-				l.err <- err
-				return
-			}
-			rudpConn.recvPacketChannel <- apacket
+			rudpConn.rawUDPDataChan <- buf
 		} else {
 			localAddr, _ := net.ResolveUDPAddr(l.Addr().Network(), l.Addr().String())
 			rudpConn, err := serverBuildConn(localAddr, remoteAddr)
@@ -83,6 +77,7 @@ func (l *RUDPListener) listen() {
 				l.peerMap.Delete(rudpConn.remoteAddr)
 			}
 			l.peerMap.Store(remoteAddr, rudpConn)
+			rudpConn.rawUDPDataChan <- buf
 		}
 	}
 }
