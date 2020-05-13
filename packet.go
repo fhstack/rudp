@@ -3,6 +3,7 @@ package rudp
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 )
 
 // packet is a RUDP segment
@@ -171,5 +172,11 @@ func newFinPacket() *packet {
 func newPinPacket() *packet {
 	return &packet{
 		segmentType: rudpSegmentTypePin,
+	}
+}
+
+func (p *packet) print() {
+	if debug {
+		fmt.Printf("packet: seqNumber = %d#ackNumber = %d#segmentType = %d#payload = %s\n", p.seqNumber, p.ackNumber, p.segmentType, string(p.payload))
 	}
 }

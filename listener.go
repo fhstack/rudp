@@ -26,7 +26,7 @@ func ListenRUDP(localAddr *net.UDPAddr) (*RUDPListener, error) {
 		err:          make(chan error, 1),
 		newConnQueue: make(chan *RUDPConn, 1<<10),
 	}
-
+	go listener.listen()
 	return listener, nil
 }
 
@@ -52,6 +52,7 @@ func (l *RUDPListener) Addr() net.Addr {
 }
 
 func (l *RUDPListener) listen() {
+	log("listen on %s\n", l.Addr().String())
 	for {
 		buf := make([]byte, RawUDPPacketLenLimit)
 		n, remoteAddr, err := l.listenConn.ReadFromUDP(buf)
@@ -64,19 +65,19 @@ func (l *RUDPListener) listen() {
 			rudpConn := v.(*RUDPConn)
 			rudpConn.rawUDPDataChan <- buf
 		} else {
-			localAddr, _ := net.ResolveUDPAddr(l.Addr().Network(), l.Addr().String())
-			rudpConn, err := serverBuildConn(localAddr, remoteAddr)
+			rudpConn, err := serverBuildConn(l.listenConn, remoteAddr)
 			if err != nil {
 				l.err <- err
 				return
 			}
 			rudpConn.buildConnCallbackListener = func() {
+				log("accept new RUDP connection from %v\n", rudpConn.RemoteAddr())
 				l.newConnQueue <- rudpConn
 			}
 			rudpConn.closeConnCallbackListener = func() {
 				l.peerMap.Delete(rudpConn.remoteAddr)
 			}
-			l.peerMap.Store(remoteAddr, rudpConn)
+			l.peerMap.Store(remoteAddr.String(), rudpConn)
 			rudpConn.rawUDPDataChan <- buf
 		}
 	}

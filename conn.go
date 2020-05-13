@@ -84,7 +84,7 @@ func DialRUDP(localAddr, remoteAddr *net.UDPAddr) (*RUDPConn, error) {
 	c.localAddr = localAddr
 	c.remoteAddr = remoteAddr
 	c.rudpConnType = connTypeClient
-	c.sendSeqNumber = rander.Uint32()
+	c.sendSeqNumber = 0
 	c.recvPacketChannel = make(chan *packet, 1<<5)
 	c.rudpConnStatus = connStatusConnecting
 
@@ -126,11 +126,13 @@ func DialRUDP(localAddr, remoteAddr *net.UDPAddr) (*RUDPConn, error) {
 
 	// client need to keep a heart beat
 	go c.keepLive()
+	log("build the RUDP connection succ!\n")
 	return c, nil
 }
 
 func (c *RUDPConn) errWatcher() {
 	err := <-c.errBus
+	log("errBus recv error: %v", err)
 	c.err = err
 	c.resendStop <- err
 	c.recvStop <- err
@@ -231,7 +233,7 @@ func (c *RUDPConn) packetHandler() {
 				}
 				// server send CON ack segment
 				segment := newConAckPacket(apacket.seqNumber).marshal()
-				n, err := c.rawUDPConn.Write(segment)
+				n, err := c.write(segment)
 				if err != nil {
 					c.errBus <- err
 					return
@@ -241,6 +243,7 @@ func (c *RUDPConn) packetHandler() {
 					return
 				}
 				// build conn
+				log("server send CON-ACK segment")
 				c.rudpConnStatus = connStatusOpen
 				c.buildConnCallbackListener()
 			}
@@ -271,10 +274,19 @@ func (c *RUDPConn) SetSendTick(nano int32) {
 	c.sendTickModifyEvent <- nano
 }
 
+func (c *RUDPConn) write(data []byte) (n int, err error) {
+	if c.rudpConnType == connTypeServer {
+		n, err = c.rawUDPConn.WriteTo(data, c.remoteAddr)
+	} else {
+		n, err = c.rawUDPConn.Write(data)
+	}
+	return
+}
+
 func (c *RUDPConn) sendPacket() {
 	apacket := <-c.sendPacketChannel
 	segment := apacket.marshal()
-	n, err := c.rawUDPConn.Write(segment)
+	n, err := c.write(segment)
 	if err != nil {
 		c.errBus <- err
 		return
@@ -283,6 +295,7 @@ func (c *RUDPConn) sendPacket() {
 		c.errBus <- errors.New(RawUDPSendNotComplete)
 		return
 	}
+	// apacket.print()
 	// only the normal segment possiblely needs to resend
 	if apacket.segmentType == rudpSegmentTypeNormal {
 		c.resendPacketQueue.putPacket(apacket)
@@ -308,6 +321,7 @@ func (c *RUDPConn) clientBuildConn() error {
 	if n != len(connSegment) {
 		return errors.New(RawUDPSendNotComplete)
 	}
+	log("client send the CONN segment\n")
 
 	// wait the server ack conn segment
 	// may the server's ack segment and normal segment out-of-order
@@ -325,27 +339,23 @@ func (c *RUDPConn) clientBuildConn() error {
 
 		if recvPacket.ackNumber == connSeqNb && recvPacket.segmentType == rudpSegmentTypeConnAck {
 			// conn OK
+			log("client recv the server CON-ACK segment\n")
 			return nil
 		} else {
-			c.recvPacketChannel <- recvPacket
+			//c.recvPacketChannel <- recvPacket
 			continue
 		}
 	}
 	return nil
 }
 
-func serverBuildConn(localAddr, remoteAddr *net.UDPAddr) (*RUDPConn, error) {
+func serverBuildConn(rawUDPConn *net.UDPConn, remoteAddr *net.UDPAddr) (*RUDPConn, error) {
 	c := &RUDPConn{}
-	udpConn, err := net.DialUDP("udp", c.localAddr, c.remoteAddr)
-	if err != nil {
-		return nil, err
-	}
-	c.rawUDPConn = udpConn
-
-	c.localAddr = localAddr
+	c.rawUDPConn = rawUDPConn
+	c.localAddr, _ = net.ResolveUDPAddr(rawUDPConn.LocalAddr().Network(), rawUDPConn.LocalAddr().String())
 	c.remoteAddr = remoteAddr
 	c.rudpConnType = connTypeServer
-	c.sendSeqNumber = rander.Uint32()
+	c.sendSeqNumber = 0
 	c.rudpConnStatus = connStatusConnecting
 
 	c.recvPacketChannel = make(chan *packet, 1<<5)
@@ -360,6 +370,8 @@ func serverBuildConn(localAddr, remoteAddr *net.UDPAddr) (*RUDPConn, error) {
 
 	c.sendStop = make(chan error, 1)
 	c.recvStop = make(chan error, 1)
+	c.resendStop = make(chan error, 1)
+	c.packetHandlerStop = make(chan error, 1)
 
 	c.closeConnCallback = func() {
 		c.rudpConnStatus = connStatusClose
@@ -379,6 +391,7 @@ func serverBuildConn(localAddr, remoteAddr *net.UDPAddr) (*RUDPConn, error) {
 }
 
 func (c *RUDPConn) Read(b []byte) (int, error) {
+	readCnt := len(b)
 	n := len(b)
 	if n == 0 {
 		return 0, nil
@@ -388,7 +401,7 @@ func (c *RUDPConn) Read(b []byte) (int, error) {
 		if n <= len(c.outputDataTmpBuffer) {
 			copy(b, c.outputDataTmpBuffer[:n])
 			c.outputDataTmpBuffer = c.outputDataTmpBuffer[n:]
-			return n, nil
+			return readCnt, nil
 		} else {
 			n -= len(c.outputDataTmpBuffer)
 			curWrite += len(c.outputDataTmpBuffer)
@@ -398,11 +411,12 @@ func (c *RUDPConn) Read(b []byte) (int, error) {
 
 	for n > 0 {
 		apacket := c.outputPacketQueue.consume()
+		// apacket.print()
 		data := apacket.payload
 		if n <= len(data) {
 			copy(b[curWrite:], data[:n])
 			c.outputDataTmpBuffer = data[n:]
-			return n, nil
+			return readCnt, nil
 		} else {
 			copy(b[curWrite:], data)
 			n -= len(data)
@@ -443,7 +457,7 @@ func (c *RUDPConn) Close() error {
 	}()
 
 	finSegment := newFinPacket().marshal()
-	n, err := c.rawUDPConn.Write(finSegment)
+	n, err := c.write(finSegment)
 	if err != nil {
 		return err
 	}
@@ -463,7 +477,7 @@ func (c *RUDPConn) resend() {
 		case <-ticker.C:
 			for _, resendPacket := range c.resendPacketQueue.consumePacketSinceNMs(ResendDelayThreshholdMS) {
 				segment := resendPacket.marshal()
-				n, err := c.rawUDPConn.Write(segment)
+				n, err := c.write(segment)
 				if err != nil {
 					c.errBus <- err
 					return

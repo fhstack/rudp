@@ -48,7 +48,10 @@ func (l *packetList) getPacketSortKey(p *packet) uint32 {
 func (l *packetList) putPacket(p *packet) {
 	newNode := &node{data: p, tsNano: time.Now().UnixNano()}
 	l.mutex.Lock()
-	defer l.mutex.Unlock()
+	defer func() {
+		l.cond.Signal()
+		l.mutex.Unlock()
+	}()
 	if l.head == nil {
 		l.head = newNode
 		l.rail = newNode
@@ -78,9 +81,7 @@ func (l *packetList) putPacket(p *packet) {
 		l.rail.next = newNode
 		l.rail = newNode
 		l.length++
-		return
 	}
-	l.cond.Signal()
 }
 
 func (l *packetList) empty() bool {
@@ -105,7 +106,6 @@ func (l *packetList) consume() *packet {
 			}
 			return head.data
 		} else {
-			fmt.Println("cond wait")
 			l.cond.Wait()
 		}
 	}
@@ -169,7 +169,15 @@ func (l *packetList) removePacketByNb(nb uint32) {
 }
 
 func (l *packetList) debug() {
-	for cur := l.head; cur != nil; cur = cur.next {
-		fmt.Printf("seqNb: %d, payload: %s\n", cur.data.seqNumber, string(cur.data.payload))
+	if l.head == nil {
+		fmt.Println("head is nil!!")
+		return
 	}
+	output := "############################\n"
+	for cur := l.head; cur != nil; cur = cur.next {
+		s := fmt.Sprintf("packetInTheList: seqNb: %d, payload: %s\n", cur.data.seqNumber, string(cur.data.payload))
+		output += s
+	}
+	output += "############################\n"
+	fmt.Print(output)
 }

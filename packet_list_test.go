@@ -31,9 +31,9 @@ func TestPacketList(t *testing.T) {
 
 	go func() {
 		for {
-			time.Sleep(time.Millisecond * 200)
-			l.debug()
 			fmt.Printf("%d\n", l.consume().seqNumber)
+			l.debug()
+			time.Sleep(time.Millisecond * 200)
 		}
 	}()
 
