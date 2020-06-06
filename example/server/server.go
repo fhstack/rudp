@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"time"
 
 	"github.com/l-f-h/rudp"
 )
@@ -23,16 +24,20 @@ func main() {
 		if err != nil {
 			log.Fatalf("listener.Accept error: %v", err)
 		}
-
+		go func() {
+			<-time.Tick(10 * time.Second)
+			conn.Close()
+		}()
 		go func() {
 			buf := make([]byte, 10)
 			for {
 				n, err := conn.Read(buf)
 				if err != nil {
-					log.Fatalf("conn.Read error: %v", err)
+					fmt.Printf("conn.Read error: %v\n", err)
+					return
 				}
 				buf = buf[:n]
-				fmt.Printf("%s", string(buf))
+				fmt.Printf(string(buf))
 			}
 		}()
 	}

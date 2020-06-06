@@ -50,11 +50,13 @@ type RUDPConn struct {
 	remoteAddr *net.UDPAddr
 	rawUDPConn *net.UDPConn
 
-	sendSeqNumber uint32
-	lastRecvTs    int64 // last recv data unix timestamp
-	lastSendTs    int64
+	sendSeqNumber       uint32
+	lastRecvTs          int64 // last recv data unix timestamp
+	lastSendTs          int64
+	maxHasReadSeqNumber uint32 // the max number that the application has read
 
-	sendTickNano        int32
+	sendTickNano int32
+
 	sendTickModifyEvent chan int32
 
 	heartBeatCycleMinute int8
@@ -108,6 +110,7 @@ func DialRUDP(localAddr, remoteAddr *net.UDPAddr) (*RUDPConn, error) {
 	c.resendStop = make(chan error, 1)
 	c.packetHandlerStop = make(chan error, 1)
 	c.heartbeatStop = make(chan error, 1)
+	c.errBus = make(chan error, 1)
 
 	c.closeConnCallback = func() {
 		c.rudpConnStatus = connStatusClose
@@ -132,7 +135,7 @@ func DialRUDP(localAddr, remoteAddr *net.UDPAddr) (*RUDPConn, error) {
 
 func (c *RUDPConn) errWatcher() {
 	err := <-c.errBus
-	log("errBus recv error: %v", err)
+	log("errBus recv error: %v\n", err)
 	c.err = err
 	c.resendStop <- err
 	c.recvStop <- err
@@ -217,6 +220,10 @@ func (c *RUDPConn) packetHandler() {
 		case apacket := <-c.recvPacketChannel:
 			switch apacket.segmentType {
 			case rudpSegmentTypeNormal:
+				if apacket.seqNumber <= c.maxHasReadSeqNumber {
+					// discard
+					continue
+				}
 				c.outputPacketQueue.putPacket(apacket)
 				// ack
 				c.sendPacketChannel <- newAckPacket(apacket.seqNumber)
@@ -243,7 +250,7 @@ func (c *RUDPConn) packetHandler() {
 					return
 				}
 				// build conn
-				log("server send CON-ACK segment")
+				log("server send CON-ACK segment\n")
 				c.rudpConnStatus = connStatusOpen
 				c.buildConnCallbackListener()
 			}
@@ -288,6 +295,7 @@ func (c *RUDPConn) sendPacket() {
 	segment := apacket.marshal()
 	n, err := c.write(segment)
 	if err != nil {
+		// log("sendPacket error: %v", err)
 		c.errBus <- err
 		return
 	}
@@ -372,6 +380,7 @@ func serverBuildConn(rawUDPConn *net.UDPConn, remoteAddr *net.UDPAddr) (*RUDPCon
 	c.recvStop = make(chan error, 1)
 	c.resendStop = make(chan error, 1)
 	c.packetHandlerStop = make(chan error, 1)
+	c.errBus = make(chan error, 1)
 
 	c.closeConnCallback = func() {
 		c.rudpConnStatus = connStatusClose
@@ -412,6 +421,7 @@ func (c *RUDPConn) Read(b []byte) (int, error) {
 	for n > 0 {
 		apacket := c.outputPacketQueue.consume()
 		// apacket.print()
+		c.maxHasReadSeqNumber = apacket.seqNumber
 		data := apacket.payload
 		if n <= len(data) {
 			copy(b[curWrite:], data[:n])
@@ -464,6 +474,7 @@ func (c *RUDPConn) Close() error {
 	if n != len(finSegment) {
 		return errors.New(RawUDPSendNotComplete)
 	}
+	c.errBus <- io.EOF
 	return nil
 }
 

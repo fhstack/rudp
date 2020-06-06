@@ -15,6 +15,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("rudp.DialRUDP error: %v", err)
 	}
+	fmt.Println(conn.LocalAddr())
+	// go func() {
+	// <-time.Tick(time.Second * 5)
+	// conn.Close()
+	// }()
 	data := []string{"******", "hello,", " this", " is", " the", " rudp", " client", "******\n"}
 	for cnt := 0; ; cnt++ {
 		n, err := conn.Write([]byte(data[cnt%len(data)]))
