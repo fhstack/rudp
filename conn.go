@@ -99,9 +99,9 @@ func DialRUDP(localAddr, remoteAddr *net.UDPAddr) (*RUDPConn, error) {
 	c.outputPacketQueue = newPacketList(packetListOrderBySeqNb)
 
 	c.rudpConnStatus = connStatusOpen
-	c.sendTickNano = DefaultSendTickNano
+	c.sendTickNano = defaultSendTickNano
 	c.sendTickModifyEvent = make(chan int32, 1)
-	c.heartBeatCycleMinute = DefaultHeartBeatCycleMinute
+	c.heartBeatCycleMinute = defaultHeartBeatCycleMinute
 	c.lastSendTs = time.Now().Unix()
 	c.lastRecvTs = time.Now().Unix()
 
@@ -178,7 +178,7 @@ func (c *RUDPConn) clientRecv() {
 		case <-c.recvStop:
 			return
 		default:
-			buf := make([]byte, RawUDPPacketLenLimit)
+			buf := make([]byte, rawUDPPacketLenLimit)
 			n, err := c.rawUDPConn.Read(buf)
 			if err != nil {
 				c.errBus <- err
@@ -228,6 +228,7 @@ func (c *RUDPConn) packetHandler() {
 				// ack
 				c.sendPacketChannel <- newAckPacket(apacket.seqNumber)
 			case rudpSegmentTypeAck:
+				log("ack %d\n", apacket.ackNumber)
 				c.resendPacketQueue.removePacketByNb(apacket.ackNumber)
 			case rudpSegmentTypeFin:
 				c.errBus <- io.EOF
@@ -295,7 +296,7 @@ func (c *RUDPConn) sendPacket() {
 	segment := apacket.marshal()
 	n, err := c.write(segment)
 	if err != nil {
-		// log("sendPacket error: %v", err)
+		log("sendPacket error: %v, %d", err, len(segment))
 		c.errBus <- err
 		return
 	}
@@ -317,7 +318,7 @@ func (c *RUDPConn) clientBuildConn() error {
 		return err
 	}
 	c.rawUDPConn = udpConn
-
+	c.rawUDPConn.SetWriteBuffer(65528)
 	// send conn segment
 	connSeqNb := c.sendSeqNumber
 	c.sendSeqNumber++
@@ -335,12 +336,12 @@ func (c *RUDPConn) clientBuildConn() error {
 	// may the server's ack segment and normal segment out-of-order
 	// so if the recv not the ack segment, we try to wait the next
 	for cnt := 0; cnt < maxWaitSegmentCntWhileConn; cnt++ {
-		buf := make([]byte, RawUDPPacketLenLimit)
+		buf := make([]byte, rawUDPPacketLenLimit)
 		n, err = udpConn.Read(buf)
 		if err != nil {
 			return err
 		}
-		recvPacket, err := unmarshalRUDPPacket(buf)
+		recvPacket, err := unmarshalRUDPPacket(buf[:n])
 		if err != nil {
 			return errors.New("analyze the recvSegment error: " + err.Error())
 		}
@@ -360,6 +361,7 @@ func (c *RUDPConn) clientBuildConn() error {
 func serverBuildConn(rawUDPConn *net.UDPConn, remoteAddr *net.UDPAddr) (*RUDPConn, error) {
 	c := &RUDPConn{}
 	c.rawUDPConn = rawUDPConn
+	c.rawUDPConn.SetWriteBuffer(65528)
 	c.localAddr, _ = net.ResolveUDPAddr(rawUDPConn.LocalAddr().Network(), rawUDPConn.LocalAddr().String())
 	c.remoteAddr = remoteAddr
 	c.rudpConnType = connTypeServer
@@ -372,7 +374,7 @@ func serverBuildConn(rawUDPConn *net.UDPConn, remoteAddr *net.UDPAddr) (*RUDPCon
 	c.resendPacketQueue = newPacketList(packetListOrderBySeqNb)
 	c.outputPacketQueue = newPacketList(packetListOrderBySeqNb)
 
-	c.sendTickNano = DefaultSendTickNano
+	c.sendTickNano = defaultSendTickNano
 	c.sendTickModifyEvent = make(chan int32, 1)
 	c.lastRecvTs = time.Now().Unix()
 
@@ -420,6 +422,9 @@ func (c *RUDPConn) Read(b []byte) (int, error) {
 
 	for n > 0 {
 		apacket := c.outputPacketQueue.consume()
+		if apacket.seqNumber - c.maxHasReadSeqNumber != 1 {
+			log("发生丢包 cur %d max %d\n", apacket.seqNumber, c.maxHasReadSeqNumber)
+		}
 		// apacket.print()
 		c.maxHasReadSeqNumber = apacket.seqNumber
 		data := apacket.payload
@@ -442,14 +447,14 @@ func (c *RUDPConn) Write(b []byte) (int, error) {
 	}
 	n := len(b)
 	for {
-		if len(b) <= RUDPPPayloadLenLimit {
+		if len(b) <= rudpPayloadLenLimit {
 			c.sendPacketChannel <- newNormalPacket(b, c.sendSeqNumber)
 			c.sendSeqNumber++
 			return n, nil
 		} else {
-			c.sendPacketChannel <- newNormalPacket(b[:RUDPPPayloadLenLimit], c.sendSeqNumber)
+			c.sendPacketChannel <- newNormalPacket(b[:rudpPayloadLenLimit], c.sendSeqNumber)
 			c.sendSeqNumber++
-			b = b[RUDPPPayloadLenLimit:]
+			b = b[rudpPayloadLenLimit:]
 		}
 	}
 }
@@ -479,14 +484,18 @@ func (c *RUDPConn) Close() error {
 }
 
 func (c *RUDPConn) resend() {
-	ticker := time.NewTicker(time.Millisecond * ResendDelayThreshholdMS)
+	ticker := time.NewTicker(time.Millisecond * time.Duration(resendDelayThreshholdMS))
 	defer ticker.Stop()
 	for {
 		select {
 		case <-c.resendStop:
 			return
 		case <-ticker.C:
-			for _, resendPacket := range c.resendPacketQueue.consumePacketSinceNMs(ResendDelayThreshholdMS) {
+			resendPacketList := c.resendPacketQueue.consumePacketSinceNMs(resendDelayThreshholdMS)
+			if len(resendPacketList) != 0 {
+				log("一轮重传\n")
+			}
+			for _, resendPacket := range resendPacketList {
 				segment := resendPacket.marshal()
 				n, err := c.write(segment)
 				if err != nil {
@@ -497,6 +506,7 @@ func (c *RUDPConn) resend() {
 					c.errBus <- errors.New(RawUDPSendNotComplete)
 					return
 				}
+				log("重传 %d\n", resendPacket.seqNumber)
 			}
 		}
 	}

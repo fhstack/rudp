@@ -39,7 +39,7 @@ const (
 
 func unmarshalRUDPPacket(data []byte) (*packet, error) {
 	r := &packet{}
-	if len(data) < RUDPHeaderLen {
+	if len(data) < rudpHeaderLen {
 		return nil, errors.New("illegal rudp segment")
 	}
 
@@ -67,7 +67,7 @@ func unmarshalRUDPPacket(data []byte) (*packet, error) {
 	}
 
 	payloadLen := (binary.BigEndian.Uint16(data[10:12]))
-	r.payload = data[RUDPHeaderLen : RUDPHeaderLen+payloadLen]
+	r.payload = data[rudpHeaderLen : rudpHeaderLen+int(payloadLen)]
 	return r, nil
 }
 
@@ -105,7 +105,7 @@ func parseFlag(flag byte) (connFlag, ackFlag, finFlag, pinFlag, errFlag bool) {
 }
 
 func (p *packet) marshal() []byte {
-	buf := make([]byte, RUDPHeaderLen+len(p.payload))
+	buf := make([]byte, rudpHeaderLen+len(p.payload))
 	binary.BigEndian.PutUint32(buf[0:4], p.seqNumber)
 	binary.BigEndian.PutUint32(buf[4:8], p.ackNumber)
 	var flag byte
@@ -129,7 +129,7 @@ func (p *packet) marshal() []byte {
 	buf[8] = flag
 	binary.BigEndian.PutUint16(buf[10:12], uint16(len(p.payload)))
 	for i, b := range p.payload {
-		buf[RUDPHeaderLen+i] = b
+		buf[rudpHeaderLen+i] = b
 	}
 	return buf
 }

@@ -54,7 +54,7 @@ func (l *RUDPListener) Addr() net.Addr {
 func (l *RUDPListener) listen() {
 	log("listen on %s\n", l.Addr().String())
 	for {
-		buf := make([]byte, RawUDPPacketLenLimit)
+		buf := make([]byte, rawUDPPacketLenLimit)
 		n, remoteAddr, err := l.listenConn.ReadFromUDP(buf)
 		if err != nil {
 			l.err <- err

@@ -111,7 +111,7 @@ func (l *packetList) consume() *packet {
 	}
 }
 
-func (l *packetList) consumePacketSinceNMs(N int32) []*packet {
+func (l *packetList) consumePacketSinceNMs(N int) []*packet {
 	l.mutex.Lock()
 	defer l.mutex.Unlock()
 	if l.empty() {
